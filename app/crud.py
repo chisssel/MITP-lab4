@@ -2,6 +2,90 @@ from sqlalchemy.orm import Session
 from app.models import Bill
 from app.schemas import BillCreate, BillUpdate
 
+PENALTY_RATES: dict[str, float] = {
+    "electricity": 0.05,
+    "water": 0.07,
+    "gas": 0.03,
+}
+
+DISCOUNT_AMOUNTS: dict[str, int] = {
+    "electricity": 50,
+    "water": 75,
+    "gas": 25,
+}
+
+COMMISSION_RATES: dict[str, float] = {
+    "electricity": 0.10,
+    "water": 0.15,
+    "gas": 0.05,
+}
+
+CRITICAL_THRESHOLD: int = 5000
+
+
+def _determine_account_type(account_number: str) -> str:
+    mapping = {
+        "EL": "electricity",
+        "WA": "water",
+        "GA": "gas",
+    }
+    prefix = account_number[:2].upper()
+    return mapping.get(prefix, "electricity")
+
+
+def _get_overdue_bills(bills: list[Bill]) -> list[Bill]:
+    return [b for b in bills if b.debt > 0]
+
+
+def _calculate_overdue_penalty(accruals: int, account_type: str) -> int:
+    rate = PENALTY_RATES.get(account_type, 0.05)
+    return int(accruals * rate)
+
+
+class MonthlyProcessingResult:
+    def __init__(self, processed_bills: list[Bill], total_debt: int, total_commission: int):
+        self.processed_bills = processed_bills
+        self.total_debt = total_debt
+        self.total_commission = total_commission
+
+
+def process_monthly_accruals(db: Session, period_prefix: str) -> MonthlyProcessingResult:
+    all_bills = db.query(Bill).all()
+    processed_bills: list[Bill] = []
+
+    for bill in all_bills:
+        account_type = _determine_account_type(bill.account_number)
+        if bill.debt > 0:
+            penalty = _calculate_overdue_penalty(bill.accruals, account_type)
+            bill.accruals += penalty
+        processed_bills.append(bill)
+
+    total_debt = sum(b.debt for b in processed_bills)
+
+    period_bills = db.query(Bill).filter(Bill.account_number.startswith(period_prefix)).all()
+    for bill in period_bills:
+        account_type = _determine_account_type(bill.account_number)
+        discount = DISCOUNT_AMOUNTS.get(account_type, 50)
+        bill.accruals = max(0, bill.accruals - discount)
+        db.add(bill)
+
+    db.commit()
+
+    for bill in processed_bills:
+        if bill.debt > CRITICAL_THRESHOLD:
+            bill.requests = f"[CRITICAL] {bill.requests}" if bill.requests else "CRITICAL: превышен порог задолженности"
+            db.add(bill)
+
+    db.commit()
+
+    total_commission = 0
+    for bill in processed_bills:
+        account_type = _determine_account_type(bill.account_number)
+        rate = COMMISSION_RATES.get(account_type, 0.10)
+        total_commission += int(bill.accruals * rate)
+
+    return MonthlyProcessingResult(processed_bills, total_debt, total_commission)
+
 
 def get_bills(db: Session) -> list[Bill]:
     return db.query(Bill).all()
@@ -38,62 +122,3 @@ def delete_bill(db: Session, bill_id: int) -> bool:
     db.delete(bill)
     db.commit()
     return True
-
-
-def p(db: Session, x1, x2, x3, x4, x5):
-    a = db.query(Bill).all()
-    b = []
-    for i in a:
-        if i.type == 1:
-            i.amount = i.amount * 1.2 + 150
-        if i.type == 2:
-            i.amount = i.amount * 1.15 + 200
-        if i.type == 3:
-            i.amount = i.amount * 1.1 + 100
-        if i.type == 1:
-            if i.status == "overdue":
-                i.penalty = i.amount * 0.05
-                i.amount = i.amount + i.penalty
-        if i.type == 2:
-            if i.status == "overdue":
-                i.penalty = i.amount * 0.07
-                i.amount = i.amount + i.penalty
-        if i.type == 3:
-            if i.status == "overdue":
-                i.penalty = i.amount * 0.03
-                i.amount = i.amount + i.penalty
-        b.append(i)
-
-    c = 0
-    for i in b:
-        c = c + i.amount
-
-    d = db.query(Bill).filter(Bill.period == x1).all()
-    for i in d:
-        if i.type == 1:
-            i.amount = i.amount - 50
-        if i.type == 2:
-            i.amount = i.amount - 75
-        if i.type == 3:
-            i.amount = i.amount - 25
-        db.add(i)
-
-    db.commit()
-
-    for i in b:
-        if i.amount > 5000:
-            i.status = "critical"
-            db.add(i)
-
-    db.commit()
-
-    e = 0
-    for i in b:
-        if i.type == 1:
-            e = e + i.amount * 0.1
-        if i.type == 2:
-            e = e + i.amount * 0.15
-        if i.type == 3:
-            e = e + i.amount * 0.05
-
-    return b, c, e
