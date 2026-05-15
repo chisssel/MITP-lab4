@@ -38,10 +38,7 @@ def sample_bill():
         "account_number": "001-00001",
         "address": "ул. Ленина, д.1, кв.1",
         "owner_name": "Иванов И.И.",
-        "readings": 1500,
-        "accruals": 3500,
-        "payments": 3000,
-        "requests": "Заменить кран",
+        "service_type": "electricity",
     }
 
 
