@@ -4,6 +4,21 @@ from datetime import datetime
 from enum import Enum
 
 
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6, max_length=100)
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
 class ServiceType(str, Enum):
     ELECTRICITY = "electricity"
     WATER = "water"
@@ -79,15 +94,25 @@ class ServiceRequestResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+ACCOUNT_NUMBER_PATTERN = r"^\d{3}-\d{5}$"
+
+
 class BillCreate(BaseModel):
-    account_number: str = Field(..., min_length=1, max_length=50, description="Номер лицевого счёта")
+    account_number: str = Field(
+        ..., min_length=1, max_length=50,
+        pattern=ACCOUNT_NUMBER_PATTERN,
+        description="Номер лицевого счёта (формат: XXX-XXXXX)",
+    )
     address: str = Field(..., min_length=1, max_length=200, description="Адрес помещения")
     owner_name: str = Field(..., min_length=1, max_length=100, description="ФИО владельца")
     service_type: ServiceType = Field(default=ServiceType.ELECTRICITY, description="Тип услуги")
 
 
 class BillUpdate(BaseModel):
-    account_number: Optional[str] = Field(None, min_length=1, max_length=50)
+    account_number: Optional[str] = Field(
+        None, min_length=1, max_length=50,
+        pattern=ACCOUNT_NUMBER_PATTERN,
+    )
     address: Optional[str] = Field(None, min_length=1, max_length=200)
     owner_name: Optional[str] = Field(None, min_length=1, max_length=100)
     service_type: Optional[ServiceType] = None

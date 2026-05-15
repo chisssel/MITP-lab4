@@ -1,8 +1,12 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Enum
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 from app.database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class ServiceType(enum.Enum):
@@ -19,6 +23,16 @@ class RequestStatus(enum.Enum):
     REJECTED = "rejected"
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(20), default="user")
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class Bill(Base):
     __tablename__ = "bills"
 
@@ -26,9 +40,9 @@ class Bill(Base):
     account_number = Column(String(50), unique=True, nullable=False, index=True)
     address = Column(String(200), nullable=False, index=True)
     owner_name = Column(String(100), nullable=False)
-    service_type = Column(Enum(ServiceType), default=ServiceType.ELECTRICITY, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    service_type = Column(String(50), default=ServiceType.ELECTRICITY.value, nullable=False, index=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     readings = relationship("MeterReading", back_populates="bill", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="bill", cascade="all, delete-orphan")
@@ -54,7 +68,7 @@ class MeterReading(Base):
     bill_id = Column(Integer, ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
     reading_value = Column(Integer, nullable=False)
     reading_date = Column(DateTime, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     bill = relationship("Bill", back_populates="readings")
 
@@ -68,7 +82,7 @@ class Payment(Base):
     payment_date = Column(DateTime, nullable=False, index=True)
     payment_method = Column(String(50), default="cash")
     transaction_id = Column(String(100), unique=True, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     bill = relationship("Bill", back_populates="payments")
 
@@ -80,10 +94,10 @@ class ServiceRequest(Base):
     bill_id = Column(Integer, ForeignKey("bills.id", ondelete="CASCADE"), nullable=False, index=True)
     request_type = Column(String(100), nullable=False)
     description = Column(String(500))
-    status = Column(Enum(RequestStatus), default=RequestStatus.PENDING, nullable=False, index=True)
+    status = Column(String(50), default=RequestStatus.PENDING.value, nullable=False, index=True)
     priority = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
     completed_at = Column(DateTime, nullable=True)
 
     bill = relationship("Bill", back_populates="service_requests")
