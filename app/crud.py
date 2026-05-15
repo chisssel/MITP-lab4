@@ -1,6 +1,9 @@
-from sqlalchemy.orm import Session
-from app.models import Bill
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session, joinedload
+from app.models import Bill, MeterReading, Payment, ServiceRequest
 from app.schemas import BillCreate, BillUpdate
+
+ALLOWED_UPDATE_FIELDS = {"account_number", "address", "owner_name", "service_type"}
 
 PENALTY_RATES: dict[str, float] = {
     "electricity": 0.05,
@@ -24,6 +27,8 @@ CRITICAL_THRESHOLD: int = 5000
 
 
 def _determine_account_type(account_number: str) -> str:
+    if len(account_number) < 2:
+        return "electricity"
     mapping = {
         "EL": "electricity",
         "WA": "water",
@@ -50,31 +55,52 @@ class MonthlyProcessingResult:
 
 
 def process_monthly_accruals(db: Session, period_prefix: str) -> MonthlyProcessingResult:
-    all_bills = db.query(Bill).all()
+    all_bills = db.query(Bill).options(joinedload(Bill.readings), joinedload(Bill.payments)).all()
     processed_bills: list[Bill] = []
 
     for bill in all_bills:
         account_type = _determine_account_type(bill.account_number)
         if bill.debt > 0:
-            penalty = _calculate_overdue_penalty(bill.accruals, account_type)
-            bill.accruals += penalty
+            penalty = _calculate_overdue_penalty(bill.total_accruals, account_type)
+            if penalty > 0:
+                reading = MeterReading(
+                    bill_id=bill.id,
+                    reading_value=penalty,
+                    reading_date=datetime.now(timezone.utc),
+                )
+                db.add(reading)
         processed_bills.append(bill)
 
     total_debt = sum(b.debt for b in processed_bills)
 
-    period_bills = db.query(Bill).filter(Bill.account_number.startswith(period_prefix)).all()
+    period_bills = db.query(Bill).options(joinedload(Bill.readings), joinedload(Bill.payments)).filter(
+        Bill.account_number.startswith(period_prefix)
+    ).all()
     for bill in period_bills:
         account_type = _determine_account_type(bill.account_number)
         discount = DISCOUNT_AMOUNTS.get(account_type, 50)
-        bill.accruals = max(0, bill.accruals - discount)
-        db.add(bill)
+        if bill.total_accruals > 0:
+            payment = Payment(
+                bill_id=bill.id,
+                amount=discount,
+                payment_date=datetime.now(timezone.utc),
+                payment_method="discount",
+            )
+            db.add(payment)
 
     db.commit()
 
     for bill in processed_bills:
         if bill.debt > CRITICAL_THRESHOLD:
-            bill.requests = f"[CRITICAL] {bill.requests}" if bill.requests else "CRITICAL: превышен порог задолженности"
-            db.add(bill)
+            existing = [r for r in bill.service_requests if r.request_type == "CRITICAL_DEBT"]
+            if not existing:
+                req = ServiceRequest(
+                    bill_id=bill.id,
+                    request_type="CRITICAL_DEBT",
+                    description="Превышен порог задолженности",
+                    priority=10,
+                )
+                db.add(req)
 
     db.commit()
 
@@ -82,17 +108,17 @@ def process_monthly_accruals(db: Session, period_prefix: str) -> MonthlyProcessi
     for bill in processed_bills:
         account_type = _determine_account_type(bill.account_number)
         rate = COMMISSION_RATES.get(account_type, 0.10)
-        total_commission += int(bill.accruals * rate)
+        total_commission += int(bill.total_accruals * rate)
 
     return MonthlyProcessingResult(processed_bills, total_debt, total_commission)
 
 
 def get_bills(db: Session) -> list[Bill]:
-    return db.query(Bill).all()
+    return db.query(Bill).options(joinedload(Bill.readings), joinedload(Bill.payments)).all()
 
 
 def get_bill(db: Session, bill_id: int) -> Bill | None:
-    return db.query(Bill).filter(Bill.id == bill_id).first()
+    return db.query(Bill).options(joinedload(Bill.readings), joinedload(Bill.payments)).filter(Bill.id == bill_id).first()
 
 
 def create_bill(db: Session, data: BillCreate) -> Bill:
@@ -109,6 +135,8 @@ def update_bill(db: Session, bill_id: int, data: BillUpdate) -> Bill | None:
         return None
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
+        if key not in ALLOWED_UPDATE_FIELDS:
+            continue
         setattr(bill, key, value)
     db.commit()
     db.refresh(bill)
