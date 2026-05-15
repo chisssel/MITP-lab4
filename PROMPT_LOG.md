@@ -75,4 +75,99 @@ a → all_bills, b → processed_bills, c → total_debt, d → period_bills, e 
 - Время: ~20 мин
 ---
 
+## Задание средней сложности: 4. Генерация Docker-конфигурации.
+### Промпт 1
+**Инструмент:** OpenCode \
+**Промпт:** Создать Dockerfile и docker-compose.yml для проекта. Dockerfile
+должен собирать приложение на FastAPI, docker-compose должен поднимать приложение
+и базу данных. Учесть миграции (Alembic) и переменные
+окружения для конфигурации.
+**Результат:** Добавлены и сконфигурированы: Alembic миграции. Dockerfile. docker-compose.yml — два сервиса. database.py 
+
+### Итого
+- Количество промптов: 1
+- Что пришлось исправлять вручную: ничего.
+- Время: ~25 мин
+---
+
+
+## Задание средней сложности: 5. Объяснение сложного кода.
+### Промпт 1
+**Инструмент:** OpenCode \
+**Промпт:** Объясни мне данный фрагмент кода простым языком и предложи улучшения:
+
+    def process_monthly_accruals(db: Session, period_prefix: str) -> MonthlyProcessingResult:
+        all_bills = db.query(Bill).all()
+        processed_bills: list[Bill] = []
+
+    for bill in all_bills:
+        account_type = _determine_account_type(bill.account_number)
+        if bill.debt > 0:
+            penalty = _calculate_overdue_penalty(bill.accruals, account_type)
+            bill.accruals += penalty
+        processed_bills.append(bill)
+
+    total_debt = sum(b.debt for b in processed_bills)
+
+    period_bills = db.query(Bill).filter(Bill.account_number.startswith(period_prefix)).all()
+    for bill in period_bills:
+        account_type = _determine_account_type(bill.account_number)
+        discount = DISCOUNT_AMOUNTS.get(account_type, 50)
+        bill.accruals = max(0, bill.accruals - discount)
+        db.add(bill)
+
+    db.commit()
+
+    for bill in processed_bills:
+        if bill.debt > CRITICAL_THRESHOLD:
+            bill.requests = f"[CRITICAL] {bill.requests}" if bill.requests else "CRITICAL: превышен порог задолженности"
+            db.add(bill)
+
+    db.commit()
+
+    total_commission = 0
+    for bill in processed_bills:
+        account_type = _determine_account_type(bill.account_number)
+        rate = COMMISSION_RATES.get(account_type, 0.10)
+        total_commission += int(bill.accruals * rate)
+
+    return MonthlyProcessingResult(processed_bills, total_debt, total_commission)
+**Результат:** Объяснение (простыми словами)
+Функция process_monthly_accruals делает ежемесячную обработку лицевых счетов ЖКХ:
+
+Загружает все счета из БД.
+Начисляет пени на просроченные счета (где долг > 0). Тип пени зависит от типа услуги (электричество/вода/газ — определяется по префиксу номера счёта EL-, WA-, GA-).
+Считает общий долг по всем счетам.
+Применяет скидки для счетов, попадающих под период (например, все счета за январь с префиксом 01).
+Маркирует критические счета (долг > 5000), добавляя пометку в поле requests.
+Считает комиссию — процент от начислений за обработку платежей (10-15% в зависимости от типа услуги).
+Возвращает обработанные счета, общий долг и общую комиссию.
+
+Проблема:
+1. Два db.commit() — если второй упадёт, первый уже зафиксирован
+2. Загрузка всех записей all() — не масштабируется
+3. Мутация объектов вне сессии — processed_bills содержит объекты, которые могут быть устаревшими
+4. Магическая строка "CRITICAL" — хардкод в бизнес-логике
+5. Два прохода по all_bills + один по processed_bills (3 цикла)
+6. _determine_account_type вызывается многократно для одного счёта
+7. Нет обработки ошибок БД — при падении запроса изменения частично потеряны
+8. Тип возврата MonthlyProcessingResult содержит ссылки на объекты Bill после commit — lazy load может упасть
+
+Предложения по улучшению:
+
+1. Обернуть всё в одну транзакцию, один commit() в конце
+2. Использовать пагинацию или yield_per()
+3. Перезапросить после коммита или работать до коммита
+4. Вынести в константу или Enum
+5. Объединить логику в один проход
+6. Кешировать результат на уровне счёта (мемоизация или добавление поля)
+7. Обернуть в try/except с db.rollback()
+8. Возвращать ID или DTO, не ORM-объекты
+
+### Итого
+- Количество промптов: 1
+- Что пришлось исправлять вручную: ничего.
+- Время: ~25 мин
+---
+
 
