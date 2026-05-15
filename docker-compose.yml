@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: housing
+      POSTGRES_PASSWORD: housing_pass
+      POSTGRES_DB: housing_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U housing -d housing_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://housing:housing_pass@db:5432/housing_db
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
